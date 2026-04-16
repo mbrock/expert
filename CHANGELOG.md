@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.2.0](https://github.com/elixir-lang/expert/compare/v0.1.0...v0.2.0) (2026-04-16)
+
+
+### Features
+
+* allow setting Elixir source directory ([#568](https://github.com/elixir-lang/expert/issues/568)) ([6e623d2](https://github.com/elixir-lang/expert/commit/6e623d2f50a7618d59cf92b7592e2e026cbcfa15))
+* **engine:** index defmacro/defmacrop definitions ([#554](https://github.com/elixir-lang/expert/issues/554)) ([ab84d7a](https://github.com/elixir-lang/expert/commit/ab84d7ace9e563b8615745028b4780b2ed965901))
+* **expert:** allow setting file log level via configuration ([#563](https://github.com/elixir-lang/expert/issues/563)) ([eeb6628](https://github.com/elixir-lang/expert/commit/eeb6628bc43e6a99470454522a9a5bef227f0cdc)), closes [#541](https://github.com/elixir-lang/expert/issues/541)
+
+
+### Bug Fixes
+
+* don't connect to the epmd daemon ([#553](https://github.com/elixir-lang/expert/issues/553)) ([292ed7a](https://github.com/elixir-lang/expert/commit/292ed7a40ec8d2d9de035c2b516b613003223224))
+* **engine:** respect formatter line length in Refactorex actions ([#571](https://github.com/elixir-lang/expert/issues/571)) ([f12c48a](https://github.com/elixir-lang/expert/commit/f12c48a436ad69f25619be76ace803408d3e0eea))
+* **engine:** stop double applying alias suffix when prefix is aliased ([#545](https://github.com/elixir-lang/expert/issues/545)) ([9de53c2](https://github.com/elixir-lang/expert/commit/9de53c22d2a829549356090451a122fa2d0cfd51))
+* **engine:** unify import lookup to correctly resolve local calls ([#547](https://github.com/elixir-lang/expert/issues/547)) ([728b76e](https://github.com/elixir-lang/expert/commit/728b76eaeb7495e5df7eefeac32221a533c993f5))
+* **expert:** add no-op handler for $/setTrace ([#564](https://github.com/elixir-lang/expert/issues/564)) ([4f425a2](https://github.com/elixir-lang/expert/commit/4f425a25439fa507ccfe475c0840cbeb866454c3))
+* **forge:** use `project.root_uri` for cache key in `Forge.Project.config` ([#575](https://github.com/elixir-lang/expert/issues/575)) ([deb019b](https://github.com/elixir-lang/expert/commit/deb019b867dfaabd641b0063a2dba59fe91b5b46))
+* handle LSP supported invalid configuration values ([#551](https://github.com/elixir-lang/expert/issues/551)) ([e973cfc](https://github.com/elixir-lang/expert/commit/e973cfcc85e9e19153e8d78202870fc3acf3b9b5))
+* hang at startup if .bashrc contains exec call ([#527](https://github.com/elixir-lang/expert/issues/527)) ([73b8d28](https://github.com/elixir-lang/expert/commit/73b8d288d92f319ee8920f0dde1e0206b13e4c0f))
+* **release:** ensure start_expert works if symlinked ([#572](https://github.com/elixir-lang/expert/issues/572)) ([c11f489](https://github.com/elixir-lang/expert/commit/c11f489a2ce845240d2834b2da8d7f84e91e1eec))
+* rework workspace folders and project discovery ([#566](https://github.com/elixir-lang/expert/issues/566)) ([345aa34](https://github.com/elixir-lang/expert/commit/345aa3452540034d4b531b9cd25c1a8a387dc940))
+
 ## [0.1.0](https://github.com/elixir-lang/expert/compare/v0.1.0-rc.6...v0.1.0) (2026-03-27)
 
 
