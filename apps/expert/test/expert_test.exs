@@ -146,6 +146,21 @@ defmodule Expert.ExpertTest do
              Forge.Workspace.get_workspace()
   end
 
+  test "initialize result advertises semantic tokens support" do
+    %GenLSP.Structures.InitializeResult{
+      capabilities: %GenLSP.Structures.ServerCapabilities{
+        semantic_tokens_provider: semantic_tokens_provider
+      }
+    } = State.initialize_result()
+
+    assert %GenLSP.Structures.SemanticTokensOptions{
+             full: true,
+             legend: legend
+           } = semantic_tokens_provider
+
+    assert legend == Expert.CodeIntelligence.SemanticTokens.legend()
+  end
+
   test "document requests return an error when the document cannot be loaded" do
     project = Fixtures.project()
     lsp = initialize_lsp(project)

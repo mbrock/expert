@@ -2,6 +2,7 @@ defmodule Expert.State do
   import Forge.EngineApi.Messages
 
   alias Expert.CodeIntelligence
+  alias Expert.CodeIntelligence.SemanticTokens, as: SemanticTokenIntelligence
   alias Expert.Configuration
   alias Expert.Document.Context
   alias Expert.Document.Lookup
@@ -341,6 +342,12 @@ defmodule Expert.State do
         trigger_characters: CodeIntelligence.Completion.trigger_characters()
       }
 
+    semantic_token_options =
+      %GenLSP.Structures.SemanticTokensOptions{
+        full: true,
+        legend: SemanticTokenIntelligence.legend()
+      }
+
     server_capabilities =
       %Structures.ServerCapabilities{
         code_action_provider: code_action_options,
@@ -352,6 +359,7 @@ defmodule Expert.State do
         execute_command_provider: command_options,
         hover_provider: true,
         references_provider: true,
+        semantic_tokens_provider: semantic_token_options,
         text_document_sync: sync_options,
         workspace_symbol_provider: true,
         workspace: %{

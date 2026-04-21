@@ -436,6 +436,9 @@ defmodule Expert do
       %Requests.TextDocumentHover{} ->
         {:ok, Handlers.Hover}
 
+      %Requests.TextDocumentSemanticTokensFull{} ->
+        {:ok, Handlers.SemanticTokens}
+
       %Requests.WorkspaceExecuteCommand{} ->
         {:ok, Handlers.Commands}
 
