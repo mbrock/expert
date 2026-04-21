@@ -13,12 +13,14 @@ defmodule Expert.CodeIntelligence.SemanticTokens do
   @token_types ~w(
     namespace
     function
+    type
     parameter
     variable
     property
     keyword
     decorator
     string
+    regexp
     number
     comment
     operator
@@ -70,7 +72,9 @@ defmodule Expert.CodeIntelligence.SemanticTokens do
   ]
 
   @block_keywords MapSet.new([:after, :catch, :do, :else, :rescue])
+  @spec_attrs MapSet.new([:callback, :macrocallback, :spec])
   @textual_operators MapSet.new([:and, :in, :not, :or, :when])
+  @type_attrs MapSet.new([:opaque, :type, :typep])
 
   @type token :: %{
           line: non_neg_integer(),
@@ -139,14 +143,49 @@ defmodule Expert.CodeIntelligence.SemanticTokens do
        when is_atom(name) do
     decorator = "@" <> Atom.to_string(name)
 
+    context =
+      cond do
+        MapSet.member?(@spec_attrs, name) -> :spec
+        MapSet.member?(@type_attrs, name) -> :type_decl
+        true -> :default
+      end
+
     token(document, meta[:line], meta[:column], decorator, :decorator) ++
-      do_collect_tokens(value, document, :default)
+      do_collect_tokens(value, document, context)
   end
 
   defp do_collect_tokens({:%, meta, [alias_ast, map_ast]}, %Document{} = document, _context) do
     token(document, meta[:line], meta[:column], "%", :operator) ++
       do_collect_tokens(alias_ast, document, :default) ++
       do_collect_tokens(map_ast, document, :default)
+  end
+
+  defp do_collect_tokens(
+         {form, meta, [{:<<>>, _, parts}, modifiers]} = ast,
+         %Document{} = document,
+         _context
+       )
+       when is_atom(form) and is_list(modifiers) do
+    if is_binary(meta[:delimiter]) and sigil_form?(form) do
+      type = if form == :sigil_r, do: :regexp, else: :string
+
+      if Enum.any?(parts, &(not is_binary(&1))) do
+        interpolated_literal_tokens(ast, parts, document, type)
+      else
+        range_tokens(ast, document, type)
+      end
+    else
+      token(document, meta[:line], meta[:column], Atom.to_string(form), :function) ++
+        Enum.flat_map(
+          [{:<<>>, meta, parts}, modifiers],
+          &do_collect_tokens(&1, document, :default)
+        )
+    end
+  end
+
+  defp do_collect_tokens({:&, meta, [capture]}, %Document{} = document, _context) do
+    token(document, meta[:line], meta[:column], "&", :operator) ++
+      do_collect_tokens(capture, document, :capture)
   end
 
   defp do_collect_tokens(
@@ -182,6 +221,29 @@ defmodule Expert.CodeIntelligence.SemanticTokens do
   defp do_collect_tokens(
          {{:., dot_meta, [receiver, name]}, meta, args},
          %Document{} = document,
+         :type
+       )
+       when is_atom(name) and is_list(args) do
+    do_collect_tokens(receiver, document, :default) ++
+      token(document, dot_meta[:line], dot_meta[:column], ".", :operator) ++
+      token(document, meta[:line], meta[:column], Atom.to_string(name), :type) ++
+      Enum.flat_map(args, &do_collect_tokens(&1, document, :type))
+  end
+
+  defp do_collect_tokens(
+         {{:., dot_meta, [receiver, name]}, meta, []},
+         %Document{} = document,
+         :capture
+       )
+       when is_atom(name) do
+    do_collect_tokens(receiver, document, :default) ++
+      token(document, dot_meta[:line], dot_meta[:column], ".", :operator) ++
+      token(document, meta[:line], meta[:column], Atom.to_string(name), :function)
+  end
+
+  defp do_collect_tokens(
+         {{:., dot_meta, [receiver, name]}, meta, args},
+         %Document{} = document,
          _context
        )
        when is_atom(name) and is_list(args) do
@@ -204,6 +266,21 @@ defmodule Expert.CodeIntelligence.SemanticTokens do
     range_token(ast, document, :namespace)
   end
 
+  defp do_collect_tokens(
+         {{:__block__, meta, [keyword]} = left, value},
+         %Document{} = document,
+         :block
+       )
+       when is_atom(keyword) do
+    if MapSet.member?(@block_keywords, keyword) do
+      token(document, meta[:line], meta[:column], Atom.to_string(keyword), :keyword) ++
+        do_collect_tokens(value, document, :default)
+    else
+      do_collect_tokens(left, document, :default) ++
+        do_collect_tokens(value, document, :default)
+    end
+  end
+
   defp do_collect_tokens({:<<>>, meta, parts} = ast, %Document{} = document, _context)
        when is_list(parts) do
     if is_binary(meta[:delimiter]) do
@@ -213,8 +290,9 @@ defmodule Expert.CodeIntelligence.SemanticTokens do
         range_tokens(ast, document, :string)
       end
     else
-      token(document, meta[:line], meta[:column], "<<>>", :operator) ++
-        Enum.flat_map(parts, &do_collect_tokens(&1, document, :default))
+      token(document, meta[:line], meta[:column], "<<", :operator) ++
+        Enum.flat_map(parts, &do_collect_tokens(&1, document, :bitstring)) ++
+        closing_token(document, meta, ">>", :operator)
     end
   end
 
@@ -259,24 +337,118 @@ defmodule Expert.CodeIntelligence.SemanticTokens do
     Enum.flat_map(nodes, &do_collect_tokens(&1, document, context))
   end
 
+  defp do_collect_tokens({:"::", meta, [left, right]}, %Document{} = document, :spec) do
+    do_collect_tokens(left, document, :spec_head) ++
+      token(document, meta[:line], meta[:column], "::", :operator) ++
+      do_collect_tokens(right, document, :type)
+  end
+
+  defp do_collect_tokens({:"::", meta, [left, right]}, %Document{} = document, :type_decl) do
+    do_collect_tokens(left, document, :type) ++
+      token(document, meta[:line], meta[:column], "::", :operator) ++
+      do_collect_tokens(right, document, :type)
+  end
+
+  defp do_collect_tokens({:"::", meta, [left, right]}, %Document{} = document, :bitstring) do
+    do_collect_tokens(left, document, :default) ++
+      token(document, meta[:line], meta[:column], "::", :operator) ++
+      do_collect_tokens(right, document, :bitstring_spec)
+  end
+
   defp do_collect_tokens({form, meta, [head | rest]}, %Document{} = document, _context)
        when form in @definition_forms do
     token(document, meta[:line], meta[:column], Atom.to_string(form), :keyword) ++
       block_tokens(document, meta) ++
       definition_head_tokens(head, document) ++
-      Enum.flat_map(rest, &do_collect_tokens(&1, document, :default))
+      Enum.flat_map(rest, &do_collect_tokens(&1, document, :block))
   end
 
   defp do_collect_tokens({:fn, meta, clauses}, %Document{} = document, _context) do
     token(document, meta[:line], meta[:column], "fn", :keyword) ++
-      Enum.flat_map(clauses, &fn_clause_tokens(&1, document))
+      Enum.flat_map(clauses, &fn_clause_tokens(&1, document)) ++
+      closing_token(document, meta, "end", :keyword)
   end
 
   defp do_collect_tokens({form, meta, args}, %Document{} = document, _context)
        when form in @keyword_forms and is_list(args) do
     token(document, meta[:line], meta[:column], Atom.to_string(form), :keyword) ++
       block_tokens(document, meta) ++
+      Enum.flat_map(args, &do_collect_tokens(&1, document, :block))
+  end
+
+  defp do_collect_tokens({name, meta, nil}, %Document{} = document, :type)
+       when is_atom(name) do
+    token_type =
+      if operator?(name) do
+        :operator
+      else
+        :type
+      end
+
+    token(document, meta[:line], meta[:column], Atom.to_string(name), token_type)
+  end
+
+  defp do_collect_tokens({name, meta, args}, %Document{} = document, :type)
+       when is_atom(name) and is_list(args) do
+    token_type =
+      if operator?(name) do
+        :operator
+      else
+        :type
+      end
+
+    token(document, meta[:line], meta[:column], Atom.to_string(name), token_type) ++
+      Enum.flat_map(args, &do_collect_tokens(&1, document, :type))
+  end
+
+  defp do_collect_tokens({name, meta, args}, %Document{} = document, :spec_head)
+       when is_atom(name) and is_list(args) do
+    token(document, meta[:line], meta[:column], Atom.to_string(name), :function) ++
+      Enum.flat_map(args, &do_collect_tokens(&1, document, :type))
+  end
+
+  defp do_collect_tokens({:/, meta, [target, arity]}, %Document{} = document, :capture) do
+    do_collect_tokens(target, document, :capture) ++
+      token(document, meta[:line], meta[:column], "/", :operator) ++
+      do_collect_tokens(arity, document, :default)
+  end
+
+  defp do_collect_tokens({name, meta, args}, %Document{} = document, :capture)
+       when is_atom(name) and is_list(args) do
+    token_type =
+      if operator?(name) do
+        :operator
+      else
+        :function
+      end
+
+    token(document, meta[:line], meta[:column], Atom.to_string(name), token_type) ++
       Enum.flat_map(args, &do_collect_tokens(&1, document, :default))
+  end
+
+  defp do_collect_tokens({name, meta, args}, %Document{} = document, :bitstring_spec)
+       when is_atom(name) and is_list(args) do
+    token_type =
+      if operator?(name) do
+        :operator
+      else
+        :keyword
+      end
+
+    token(document, meta[:line], meta[:column], Atom.to_string(name), token_type) ++
+      Enum.flat_map(args, &do_collect_tokens(&1, document, :default))
+  end
+
+  defp do_collect_tokens({name, meta, nil}, %Document{} = document, :bitstring_spec)
+       when is_atom(name) do
+    token_type =
+      if operator?(name) do
+        :operator
+      else
+        :keyword
+      end
+
+    token(document, meta[:line], meta[:column], Atom.to_string(name), token_type)
   end
 
   defp do_collect_tokens({name, meta, nil}, %Document{} = document, :parameter)
@@ -547,6 +719,12 @@ defmodule Expert.CodeIntelligence.SemanticTokens do
 
   defp number_token?(token) do
     String.match?(token, ~r/^\d/)
+  end
+
+  defp sigil_form?(form) when is_atom(form) do
+    form
+    |> Atom.to_string()
+    |> String.starts_with?("sigil_")
   end
 
   defp operator?(form) do
