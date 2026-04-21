@@ -1,8 +1,8 @@
 defmodule Expert.Provider.Handlers.SemanticTokens do
   @behaviour Expert.Provider.Handler
 
-  alias Expert.CodeIntelligence.SemanticTokens
   alias Expert.Document.Context
+  alias Forge.CodeIntelligence.SyntacticTokens
   alias GenLSP.Requests
   alias GenLSP.Structures
 
@@ -13,6 +13,6 @@ defmodule Expert.Provider.Handlers.SemanticTokens do
         },
         %Context{} = context
       ) do
-    {:ok, SemanticTokens.full(context.document)}
+    {:ok, SyntacticTokens.full(context.document)}
   end
 end

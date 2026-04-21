@@ -158,7 +158,7 @@ defmodule Expert.ExpertTest do
              legend: legend
            } = semantic_tokens_provider
 
-    assert legend == Expert.CodeIntelligence.SemanticTokens.legend()
+    assert legend == Forge.CodeIntelligence.SyntacticTokens.legend()
   end
 
   test "semantic token requests are served before engine initialization" do

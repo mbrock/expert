@@ -2,7 +2,6 @@ defmodule Expert.State do
   import Forge.EngineApi.Messages
 
   alias Expert.CodeIntelligence
-  alias Expert.CodeIntelligence.SemanticTokens, as: SemanticTokenIntelligence
   alias Expert.Configuration
   alias Expert.Document.Context
   alias Expert.Document.Lookup
@@ -10,6 +9,7 @@ defmodule Expert.State do
   alias Expert.Project
   alias Expert.Project.Store
   alias Expert.Provider.Handlers
+  alias Forge.CodeIntelligence.SyntacticTokens
   alias Forge.Document
   alias Forge.Project
   alias GenLSP.Enumerations
@@ -345,7 +345,7 @@ defmodule Expert.State do
     semantic_token_options =
       %GenLSP.Structures.SemanticTokensOptions{
         full: true,
-        legend: SemanticTokenIntelligence.legend()
+        legend: SyntacticTokens.legend()
       }
 
     server_capabilities =

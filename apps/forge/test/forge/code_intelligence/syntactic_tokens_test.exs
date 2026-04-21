@@ -1,19 +1,9 @@
-defmodule Expert.Provider.Handlers.SemanticTokensTest do
-  use ExUnit.Case, async: false
+defmodule Forge.CodeIntelligence.SyntacticTokensTest do
+  use ExUnit.Case, async: true
 
-  alias Expert.CodeIntelligence.SemanticTokens
-  alias Expert.Document.Context
-  alias Expert.Protocol.Convert
-  alias Expert.Provider.Handlers
+  alias Forge.CodeIntelligence.SyntacticTokens
   alias Forge.Document
-  alias Forge.Project
-  alias GenLSP.Requests.TextDocumentSemanticTokensFull
   alias GenLSP.Structures
-
-  setup_all do
-    start_supervised!(Expert.Application.document_store_child_spec())
-    :ok
-  end
 
   test "emits semantic tokens for basic Elixir syntax" do
     text = """
@@ -25,22 +15,7 @@ defmodule Expert.Provider.Handlers.SemanticTokensTest do
     end
     """
 
-    uri = "file:///semantic_tokens_test.ex"
-    :ok = Document.Store.open(uri, text, 1)
-
-    on_exit(fn ->
-      Document.Store.close(uri)
-    end)
-
-    {:ok, request} = build_request(uri)
-
-    document = Document.Container.context_document(request, nil)
-    context = Context.new(uri, document, Project.bare(uri))
-
-    {:ok, %Structures.SemanticTokens{data: data}} =
-      Handlers.SemanticTokens.handle(request, context)
-
-    tokens = decode(data, SemanticTokens.legend())
+    tokens = tokens_for(text, "file:///semantic_tokens_test.ex")
 
     assert %{line: 0, start: 0, length: 6, type: "comment"} in tokens
     assert %{line: 1, start: 0, length: 9, type: "keyword"} in tokens
@@ -64,22 +39,7 @@ defmodule Expert.Provider.Handlers.SemanticTokensTest do
     meta[:line]
     """
 
-    uri = "file:///semantic_tokens_interpolation_test.ex"
-    :ok = Document.Store.open(uri, text, 1)
-
-    on_exit(fn ->
-      Document.Store.close(uri)
-    end)
-
-    {:ok, request} = build_request(uri)
-
-    document = Document.Container.context_document(request, nil)
-    context = Context.new(uri, document, Project.bare(uri))
-
-    {:ok, %Structures.SemanticTokens{data: data}} =
-      Handlers.SemanticTokens.handle(request, context)
-
-    tokens = decode(data, SemanticTokens.legend())
+    tokens = tokens_for(text, "file:///semantic_tokens_interpolation_test.ex")
 
     assert %{line: 0, start: 0, length: 7, type: "string"} in tokens
     assert %{line: 0, start: 7, length: 2, type: "operator"} in tokens
@@ -96,22 +56,7 @@ defmodule Expert.Provider.Handlers.SemanticTokensTest do
   test "emits semantic tokens for interpolated quoted atoms" do
     text = ~S|:"#{Project.name(project)}_handler"|
 
-    uri = "file:///semantic_tokens_interpolated_atom_test.ex"
-    :ok = Document.Store.open(uri, text, 1)
-
-    on_exit(fn ->
-      Document.Store.close(uri)
-    end)
-
-    {:ok, request} = build_request(uri)
-
-    document = Document.Container.context_document(request, nil)
-    context = Context.new(uri, document, Project.bare(uri))
-
-    {:ok, %Structures.SemanticTokens{data: data}} =
-      Handlers.SemanticTokens.handle(request, context)
-
-    tokens = decode(data, SemanticTokens.legend())
+    tokens = tokens_for(text, "file:///semantic_tokens_interpolated_atom_test.ex")
 
     assert %{line: 0, start: 0, length: 2, type: "enumMember"} in tokens
     assert %{line: 0, start: 2, length: 2, type: "operator"} in tokens
@@ -130,22 +75,7 @@ defmodule Expert.Provider.Handlers.SemanticTokensTest do
     {:foo, bar}
     """
 
-    uri = "file:///semantic_tokens_atom_collections_test.ex"
-    :ok = Document.Store.open(uri, text, 1)
-
-    on_exit(fn ->
-      Document.Store.close(uri)
-    end)
-
-    {:ok, request} = build_request(uri)
-
-    document = Document.Container.context_document(request, nil)
-    context = Context.new(uri, document, Project.bare(uri))
-
-    {:ok, %Structures.SemanticTokens{data: data}} =
-      Handlers.SemanticTokens.handle(request, context)
-
-    tokens = decode(data, SemanticTokens.legend())
+    tokens = tokens_for(text, "file:///semantic_tokens_atom_collections_test.ex")
 
     assert %{line: 0, start: 0, length: 4, type: "enumMember"} in tokens
     assert %{line: 1, start: 1, length: 4, type: "enumMember"} in tokens
@@ -159,22 +89,7 @@ defmodule Expert.Provider.Handlers.SemanticTokensTest do
     ~c"hi"
     """
 
-    uri = "file:///semantic_tokens_sigils_test.ex"
-    :ok = Document.Store.open(uri, text, 1)
-
-    on_exit(fn ->
-      Document.Store.close(uri)
-    end)
-
-    {:ok, request} = build_request(uri)
-
-    document = Document.Container.context_document(request, nil)
-    context = Context.new(uri, document, Project.bare(uri))
-
-    {:ok, %Structures.SemanticTokens{data: data}} =
-      Handlers.SemanticTokens.handle(request, context)
-
-    tokens = decode(data, SemanticTokens.legend())
+    tokens = tokens_for(text, "file:///semantic_tokens_sigils_test.ex")
 
     assert %{line: 0, start: 0, length: 7, type: "regexp"} in tokens
     assert %{line: 1, start: 0, length: 6, type: "string"} in tokens
@@ -200,22 +115,7 @@ defmodule Expert.Provider.Handlers.SemanticTokensTest do
     fn x -> x end
     """
 
-    uri = "file:///semantic_tokens_blocks_test.ex"
-    :ok = Document.Store.open(uri, text, 1)
-
-    on_exit(fn ->
-      Document.Store.close(uri)
-    end)
-
-    {:ok, request} = build_request(uri)
-
-    document = Document.Container.context_document(request, nil)
-    context = Context.new(uri, document, Project.bare(uri))
-
-    {:ok, %Structures.SemanticTokens{data: data}} =
-      Handlers.SemanticTokens.handle(request, context)
-
-    tokens = decode(data, SemanticTokens.legend())
+    tokens = tokens_for(text, "file:///semantic_tokens_blocks_test.ex")
 
     assert %{line: 0, start: 0, length: 2, type: "keyword"} in tokens
     assert %{line: 0, start: 5, length: 2, type: "keyword"} in tokens
@@ -242,22 +142,7 @@ defmodule Expert.Provider.Handlers.SemanticTokensTest do
     <<foo::binary, bar>>
     """
 
-    uri = "file:///semantic_tokens_capture_bitstring_test.ex"
-    :ok = Document.Store.open(uri, text, 1)
-
-    on_exit(fn ->
-      Document.Store.close(uri)
-    end)
-
-    {:ok, request} = build_request(uri)
-
-    document = Document.Container.context_document(request, nil)
-    context = Context.new(uri, document, Project.bare(uri))
-
-    {:ok, %Structures.SemanticTokens{data: data}} =
-      Handlers.SemanticTokens.handle(request, context)
-
-    tokens = decode(data, SemanticTokens.legend())
+    tokens = tokens_for(text, "file:///semantic_tokens_capture_bitstring_test.ex")
 
     assert %{line: 0, start: 0, length: 1, type: "operator"} in tokens
     assert %{line: 0, start: 1, length: 6, type: "namespace"} in tokens
@@ -283,22 +168,7 @@ defmodule Expert.Provider.Handlers.SemanticTokensTest do
     @type t :: :ok | :error
     """
 
-    uri = "file:///semantic_tokens_typespec_test.ex"
-    :ok = Document.Store.open(uri, text, 1)
-
-    on_exit(fn ->
-      Document.Store.close(uri)
-    end)
-
-    {:ok, request} = build_request(uri)
-
-    document = Document.Container.context_document(request, nil)
-    context = Context.new(uri, document, Project.bare(uri))
-
-    {:ok, %Structures.SemanticTokens{data: data}} =
-      Handlers.SemanticTokens.handle(request, context)
-
-    tokens = decode(data, SemanticTokens.legend())
+    tokens = tokens_for(text, "file:///semantic_tokens_typespec_test.ex")
 
     assert %{line: 0, start: 0, length: 5, type: "decorator"} in tokens
     assert %{line: 0, start: 6, length: 3, type: "function"} in tokens
@@ -314,15 +184,10 @@ defmodule Expert.Provider.Handlers.SemanticTokensTest do
     assert %{line: 1, start: 17, length: 6, type: "enumMember"} in tokens
   end
 
-  defp build_request(uri) do
-    request = %TextDocumentSemanticTokensFull{
-      id: 1,
-      params: %Structures.SemanticTokensParams{
-        text_document: %Structures.TextDocumentIdentifier{uri: uri}
-      }
-    }
-
-    Convert.to_native(request)
+  defp tokens_for(text, uri) do
+    document = Document.new(uri, text, 1)
+    %Structures.SemanticTokens{data: data} = SyntacticTokens.full(document)
+    decode(data, SyntacticTokens.legend())
   end
 
   defp decode(data, %Structures.SemanticTokensLegend{token_types: token_types}) do

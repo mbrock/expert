@@ -1,11 +1,25 @@
-defmodule Expert.CodeIntelligence.SemanticTokens do
-  @moduledoc false
+defmodule Forge.CodeIntelligence.SyntacticTokens do
+  @moduledoc """
+  Builds a fast syntactic approximation of LSP semantic tokens for Elixir documents.
 
-  alias Expert.Protocol.Conversions
+  This module classifies token spans from parser comments, AST shape, and a small amount of
+  local syntactic context. It does not resolve symbols through project analysis, so its output
+  is intentionally best-effort rather than fully semantic.
+
+  In practice that means it can emit useful token kinds such as `namespace`, `function`,
+  `parameter`, `string`, and `keyword`, but it cannot reliably answer questions that require
+  name resolution or project knowledge. For example, a callable may be labeled as `function`
+  even when it ultimately resolves to a macro, and no semantic modifiers are attached.
+
+  The return type is still `GenLSP.Structures.SemanticTokens` because this module exists to feed
+  the LSP semantic-tokens feature, even though the classification itself is syntactic.
+  """
+
   alias Forge.Ast
   alias Forge.Ast.Range, as: AstRange
   alias Forge.CodeUnit
   alias Forge.Document
+  import Forge.Document.Line
   alias Forge.Document.Position
   alias Forge.Document.Range
   alias GenLSP.Structures
@@ -583,7 +597,7 @@ defmodule Expert.CodeIntelligence.SemanticTokens do
     with {:ok, %Range{start: start, end: finish}} <- AstRange.fetch(ast, document),
          true <- start.line == finish.line,
          text when text != "" <- Document.fragment(document, start, finish),
-         {:ok, lsp_position} <- Conversions.to_lsp(start) do
+         {:ok, lsp_position} <- to_lsp_position(start) do
       [
         %{
           line: lsp_position.line,
@@ -641,7 +655,7 @@ defmodule Expert.CodeIntelligence.SemanticTokens do
     finish = Position.new(document, line, finish_column)
     text = Document.fragment(document, start, finish)
 
-    case {text, Conversions.to_lsp(start)} do
+    case {text, to_lsp_position(start)} do
       {"", _} ->
         []
 
@@ -666,7 +680,7 @@ defmodule Expert.CodeIntelligence.SemanticTokens do
   defp token(%Document{} = document, line, column, text, type)
        when is_integer(line) and is_integer(column) and is_binary(text) and text != "" do
     with %Position{} = position <- Position.new(document, line, column),
-         {:ok, lsp_position} <- Conversions.to_lsp(position) do
+         {:ok, lsp_position} <- to_lsp_position(position) do
       [
         %{
           line: lsp_position.line,
@@ -730,6 +744,28 @@ defmodule Expert.CodeIntelligence.SemanticTokens do
   defp operator?(form) do
     MapSet.member?(@textual_operators, form) or
       Atom.to_string(form) =~ ~r/^[[:punct:]]+$/
+  end
+
+  defp to_lsp_position(%Position{valid?: false}) do
+    {:error, :invalid_position}
+  end
+
+  defp to_lsp_position(%Position{context_line: line(ascii?: true, text: text)} = position) do
+    {:ok,
+     %{
+       line: position.line - position.starting_index,
+       character: min(position.character - 1, byte_size(text))
+     }}
+  end
+
+  defp to_lsp_position(%Position{context_line: line(text: utf8_text)} = position) do
+    character = CodeUnit.utf8_position_to_utf16_offset(utf8_text, position.character - 1)
+
+    {:ok,
+     %{
+       line: position.line - position.starting_index,
+       character: min(character, CodeUnit.count(:utf16, utf8_text))
+     }}
   end
 
   defp token_type_index(type) do
