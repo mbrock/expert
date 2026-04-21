@@ -98,6 +98,8 @@ defmodule Forge.CodeIntelligence.SyntacticTokens do
           modifiers: non_neg_integer()
         }
 
+  @type token_tree :: token | [token_tree]
+
   @spec legend() :: Structures.SemanticTokensLegend.t()
   def legend do
     %Structures.SemanticTokensLegend{
@@ -111,9 +113,8 @@ defmodule Forge.CodeIntelligence.SyntacticTokens do
     {ast, comments} = parse(document)
 
     tokens =
-      comments
-      |> comment_tokens(document)
-      |> Kernel.++(collect_tokens(ast, document))
+      [comment_tokens(comments, document), collect_tokens(ast, document)]
+      |> flatten_tokens()
       |> Enum.uniq()
       |> Enum.sort_by(&{&1.line, &1.start, &1.length, &1.type, &1.modifiers})
 
@@ -134,7 +135,7 @@ defmodule Forge.CodeIntelligence.SyntacticTokens do
   end
 
   defp comment_tokens(comments, %Document{} = document) do
-    Enum.flat_map(comments, fn %{line: line, column: column, text: text} ->
+    Enum.map(comments, fn %{line: line, column: column, text: text} ->
       token(document, line, column, text, :comment)
     end)
   end
@@ -142,14 +143,14 @@ defmodule Forge.CodeIntelligence.SyntacticTokens do
   defp collect_tokens(nil, _document), do: []
 
   defp collect_tokens(ast, %Document{} = document) do
-    do_collect_tokens(ast, document, :default)
+    scan(ast, document, :default)
   end
 
-  defp do_collect_tokens(list, %Document{} = document, context) when is_list(list) do
-    Enum.flat_map(list, &do_collect_tokens(&1, document, context))
+  defp scan(list, %Document{} = document, context) when is_list(list) do
+    Enum.map(list, &scan(&1, document, context))
   end
 
-  defp do_collect_tokens(
+  defp scan(
          {:@, meta, [{name, _name_meta, value}]},
          %Document{} = document,
          _context
@@ -164,17 +165,21 @@ defmodule Forge.CodeIntelligence.SyntacticTokens do
         true -> :default
       end
 
-    token(document, meta[:line], meta[:column], decorator, :decorator) ++
-      do_collect_tokens(value, document, context)
+    [
+      token(document, meta[:line], meta[:column], decorator, :decorator),
+      scan(value, document, context)
+    ]
   end
 
-  defp do_collect_tokens({:%, meta, [alias_ast, map_ast]}, %Document{} = document, _context) do
-    token(document, meta[:line], meta[:column], "%", :operator) ++
-      do_collect_tokens(alias_ast, document, :default) ++
-      do_collect_tokens(map_ast, document, :default)
+  defp scan({:%, meta, [alias_ast, map_ast]}, %Document{} = document, _context) do
+    [
+      token(document, meta[:line], meta[:column], "%", :operator),
+      scan(alias_ast, document, :default),
+      scan(map_ast, document, :default)
+    ]
   end
 
-  defp do_collect_tokens(
+  defp scan(
          {form, meta, [{:<<>>, _, parts}, modifiers]} = ast,
          %Document{} = document,
          _context
@@ -189,20 +194,21 @@ defmodule Forge.CodeIntelligence.SyntacticTokens do
         range_tokens(ast, document, type)
       end
     else
-      token(document, meta[:line], meta[:column], Atom.to_string(form), :function) ++
-        Enum.flat_map(
-          [{:<<>>, meta, parts}, modifiers],
-          &do_collect_tokens(&1, document, :default)
-        )
+      [
+        token(document, meta[:line], meta[:column], Atom.to_string(form), :function),
+        Enum.map([{:<<>>, meta, parts}, modifiers], &scan(&1, document, :default))
+      ]
     end
   end
 
-  defp do_collect_tokens({:&, meta, [capture]}, %Document{} = document, _context) do
-    token(document, meta[:line], meta[:column], "&", :operator) ++
-      do_collect_tokens(capture, document, :capture)
+  defp scan({:&, meta, [capture]}, %Document{} = document, _context) do
+    [
+      token(document, meta[:line], meta[:column], "&", :operator),
+      scan(capture, document, :capture)
+    ]
   end
 
-  defp do_collect_tokens(
+  defp scan(
          {{:., _, [:erlang, :binary_to_atom]}, meta, [{:<<>>, _, parts}, :utf8]} = ast,
          %Document{} = document,
          _context
@@ -215,47 +221,55 @@ defmodule Forge.CodeIntelligence.SyntacticTokens do
     end
   end
 
-  defp do_collect_tokens(
+  defp scan(
          {{:., _dot_meta, [Access, :get]}, meta, [receiver, key]},
          %Document{} = document,
          _context
        ) do
     if meta[:from_brackets] == true do
-      do_collect_tokens(receiver, document, :default) ++
-        token(document, meta[:line], meta[:column], "[", :operator) ++
-        do_collect_tokens(key, document, :default) ++
+      [
+        scan(receiver, document, :default),
+        token(document, meta[:line], meta[:column], "[", :operator),
+        scan(key, document, :default),
         closing_token(document, meta, "]", :operator)
+      ]
     else
-      do_collect_tokens(receiver, document, :default) ++
-        token(document, meta[:line], meta[:column], "get", :function) ++
-        do_collect_tokens([key], document, :default)
+      [
+        scan(receiver, document, :default),
+        token(document, meta[:line], meta[:column], "get", :function),
+        scan([key], document, :default)
+      ]
     end
   end
 
-  defp do_collect_tokens(
+  defp scan(
          {{:., dot_meta, [receiver, name]}, meta, args},
          %Document{} = document,
          :type
        )
        when is_atom(name) and is_list(args) do
-    do_collect_tokens(receiver, document, :default) ++
-      token(document, dot_meta[:line], dot_meta[:column], ".", :operator) ++
-      token(document, meta[:line], meta[:column], Atom.to_string(name), :type) ++
-      Enum.flat_map(args, &do_collect_tokens(&1, document, :type))
+    [
+      scan(receiver, document, :default),
+      token(document, dot_meta[:line], dot_meta[:column], ".", :operator),
+      token(document, meta[:line], meta[:column], Atom.to_string(name), :type),
+      Enum.map(args, &scan(&1, document, :type))
+    ]
   end
 
-  defp do_collect_tokens(
+  defp scan(
          {{:., dot_meta, [receiver, name]}, meta, []},
          %Document{} = document,
          :capture
        )
        when is_atom(name) do
-    do_collect_tokens(receiver, document, :default) ++
-      token(document, dot_meta[:line], dot_meta[:column], ".", :operator) ++
+    [
+      scan(receiver, document, :default),
+      token(document, dot_meta[:line], dot_meta[:column], ".", :operator),
       token(document, meta[:line], meta[:column], Atom.to_string(name), :function)
+    ]
   end
 
-  defp do_collect_tokens(
+  defp scan(
          {{:., dot_meta, [receiver, name]}, meta, args},
          %Document{} = document,
          _context
@@ -270,32 +284,38 @@ defmodule Forge.CodeIntelligence.SyntacticTokens do
         :function
       end
 
-    do_collect_tokens(receiver, document, :default) ++
-      token(document, dot_meta[:line], dot_meta[:column], ".", :operator) ++
-      token(document, meta[:line], meta[:column], name_text, name_type) ++
-      do_collect_tokens(args, document, :default)
+    [
+      scan(receiver, document, :default),
+      token(document, dot_meta[:line], dot_meta[:column], ".", :operator),
+      token(document, meta[:line], meta[:column], name_text, name_type),
+      scan(args, document, :default)
+    ]
   end
 
-  defp do_collect_tokens({:__aliases__, _, _} = ast, %Document{} = document, _context) do
+  defp scan({:__aliases__, _, _} = ast, %Document{} = document, _context) do
     range_token(ast, document, :namespace)
   end
 
-  defp do_collect_tokens(
+  defp scan(
          {{:__block__, meta, [keyword]} = left, value},
          %Document{} = document,
          :block
        )
        when is_atom(keyword) do
     if MapSet.member?(@block_keywords, keyword) do
-      token(document, meta[:line], meta[:column], Atom.to_string(keyword), :keyword) ++
-        do_collect_tokens(value, document, :default)
+      [
+        token(document, meta[:line], meta[:column], Atom.to_string(keyword), :keyword),
+        scan(value, document, :default)
+      ]
     else
-      do_collect_tokens(left, document, :default) ++
-        do_collect_tokens(value, document, :default)
+      [
+        scan(left, document, :default),
+        scan(value, document, :default)
+      ]
     end
   end
 
-  defp do_collect_tokens({:<<>>, meta, parts} = ast, %Document{} = document, _context)
+  defp scan({:<<>>, meta, parts} = ast, %Document{} = document, _context)
        when is_list(parts) do
     if is_binary(meta[:delimiter]) do
       if Enum.any?(parts, &(not is_binary(&1))) do
@@ -304,13 +324,15 @@ defmodule Forge.CodeIntelligence.SyntacticTokens do
         range_tokens(ast, document, :string)
       end
     else
-      token(document, meta[:line], meta[:column], "<<", :operator) ++
-        Enum.flat_map(parts, &do_collect_tokens(&1, document, :bitstring)) ++
+      [
+        token(document, meta[:line], meta[:column], "<<", :operator),
+        Enum.map(parts, &scan(&1, document, :bitstring)),
         closing_token(document, meta, ">>", :operator)
+      ]
     end
   end
 
-  defp do_collect_tokens(
+  defp scan(
          {:__block__, meta, [value]} = ast,
          %Document{} = document,
          _context
@@ -331,7 +353,7 @@ defmodule Forge.CodeIntelligence.SyntacticTokens do
     end
   end
 
-  defp do_collect_tokens({:__block__, meta, [_value]} = ast, %Document{} = document, _context) do
+  defp scan({:__block__, meta, [_value]} = ast, %Document{} = document, _context) do
     cond do
       is_binary(meta[:delimiter]) ->
         range_token(ast, document, :string)
@@ -342,55 +364,67 @@ defmodule Forge.CodeIntelligence.SyntacticTokens do
       true ->
         ast
         |> elem(2)
-        |> Enum.flat_map(&do_collect_tokens(&1, document, :default))
+        |> Enum.map(&scan(&1, document, :default))
     end
   end
 
-  defp do_collect_tokens({:__block__, _meta, nodes}, %Document{} = document, context)
+  defp scan({:__block__, _meta, nodes}, %Document{} = document, context)
        when is_list(nodes) do
-    Enum.flat_map(nodes, &do_collect_tokens(&1, document, context))
+    Enum.map(nodes, &scan(&1, document, context))
   end
 
-  defp do_collect_tokens({:"::", meta, [left, right]}, %Document{} = document, :spec) do
-    do_collect_tokens(left, document, :spec_head) ++
-      token(document, meta[:line], meta[:column], "::", :operator) ++
-      do_collect_tokens(right, document, :type)
+  defp scan({:"::", meta, [left, right]}, %Document{} = document, :spec) do
+    [
+      scan(left, document, :spec_head),
+      token(document, meta[:line], meta[:column], "::", :operator),
+      scan(right, document, :type)
+    ]
   end
 
-  defp do_collect_tokens({:"::", meta, [left, right]}, %Document{} = document, :type_decl) do
-    do_collect_tokens(left, document, :type) ++
-      token(document, meta[:line], meta[:column], "::", :operator) ++
-      do_collect_tokens(right, document, :type)
+  defp scan({:"::", meta, [left, right]}, %Document{} = document, :type_decl) do
+    [
+      scan(left, document, :type),
+      token(document, meta[:line], meta[:column], "::", :operator),
+      scan(right, document, :type)
+    ]
   end
 
-  defp do_collect_tokens({:"::", meta, [left, right]}, %Document{} = document, :bitstring) do
-    do_collect_tokens(left, document, :default) ++
-      token(document, meta[:line], meta[:column], "::", :operator) ++
-      do_collect_tokens(right, document, :bitstring_spec)
+  defp scan({:"::", meta, [left, right]}, %Document{} = document, :bitstring) do
+    [
+      scan(left, document, :default),
+      token(document, meta[:line], meta[:column], "::", :operator),
+      scan(right, document, :bitstring_spec)
+    ]
   end
 
-  defp do_collect_tokens({form, meta, [head | rest]}, %Document{} = document, _context)
+  defp scan({form, meta, [head | rest]}, %Document{} = document, _context)
        when form in @definition_forms do
-    token(document, meta[:line], meta[:column], Atom.to_string(form), :keyword) ++
-      block_tokens(document, meta) ++
-      definition_head_tokens(head, document) ++
-      Enum.flat_map(rest, &do_collect_tokens(&1, document, :block))
+    [
+      token(document, meta[:line], meta[:column], Atom.to_string(form), :keyword),
+      block_tokens(document, meta),
+      definition_head_tokens(head, document),
+      Enum.map(rest, &scan(&1, document, :block))
+    ]
   end
 
-  defp do_collect_tokens({:fn, meta, clauses}, %Document{} = document, _context) do
-    token(document, meta[:line], meta[:column], "fn", :keyword) ++
-      Enum.flat_map(clauses, &fn_clause_tokens(&1, document)) ++
+  defp scan({:fn, meta, clauses}, %Document{} = document, _context) do
+    [
+      token(document, meta[:line], meta[:column], "fn", :keyword),
+      Enum.map(clauses, &fn_clause_tokens(&1, document)),
       closing_token(document, meta, "end", :keyword)
+    ]
   end
 
-  defp do_collect_tokens({form, meta, args}, %Document{} = document, _context)
+  defp scan({form, meta, args}, %Document{} = document, _context)
        when form in @keyword_forms and is_list(args) do
-    token(document, meta[:line], meta[:column], Atom.to_string(form), :keyword) ++
-      block_tokens(document, meta) ++
-      Enum.flat_map(args, &do_collect_tokens(&1, document, :block))
+    [
+      token(document, meta[:line], meta[:column], Atom.to_string(form), :keyword),
+      block_tokens(document, meta),
+      Enum.map(args, &scan(&1, document, :block))
+    ]
   end
 
-  defp do_collect_tokens({name, meta, nil}, %Document{} = document, :type)
+  defp scan({name, meta, nil}, %Document{} = document, :type)
        when is_atom(name) do
     token_type =
       if operator?(name) do
@@ -402,7 +436,7 @@ defmodule Forge.CodeIntelligence.SyntacticTokens do
     token(document, meta[:line], meta[:column], Atom.to_string(name), token_type)
   end
 
-  defp do_collect_tokens({name, meta, args}, %Document{} = document, :type)
+  defp scan({name, meta, args}, %Document{} = document, :type)
        when is_atom(name) and is_list(args) do
     token_type =
       if operator?(name) do
@@ -411,23 +445,29 @@ defmodule Forge.CodeIntelligence.SyntacticTokens do
         :type
       end
 
-    token(document, meta[:line], meta[:column], Atom.to_string(name), token_type) ++
-      Enum.flat_map(args, &do_collect_tokens(&1, document, :type))
+    [
+      token(document, meta[:line], meta[:column], Atom.to_string(name), token_type),
+      Enum.map(args, &scan(&1, document, :type))
+    ]
   end
 
-  defp do_collect_tokens({name, meta, args}, %Document{} = document, :spec_head)
+  defp scan({name, meta, args}, %Document{} = document, :spec_head)
        when is_atom(name) and is_list(args) do
-    token(document, meta[:line], meta[:column], Atom.to_string(name), :function) ++
-      Enum.flat_map(args, &do_collect_tokens(&1, document, :type))
+    [
+      token(document, meta[:line], meta[:column], Atom.to_string(name), :function),
+      Enum.map(args, &scan(&1, document, :type))
+    ]
   end
 
-  defp do_collect_tokens({:/, meta, [target, arity]}, %Document{} = document, :capture) do
-    do_collect_tokens(target, document, :capture) ++
-      token(document, meta[:line], meta[:column], "/", :operator) ++
-      do_collect_tokens(arity, document, :default)
+  defp scan({:/, meta, [target, arity]}, %Document{} = document, :capture) do
+    [
+      scan(target, document, :capture),
+      token(document, meta[:line], meta[:column], "/", :operator),
+      scan(arity, document, :default)
+    ]
   end
 
-  defp do_collect_tokens({name, meta, args}, %Document{} = document, :capture)
+  defp scan({name, meta, args}, %Document{} = document, :capture)
        when is_atom(name) and is_list(args) do
     token_type =
       if operator?(name) do
@@ -436,11 +476,13 @@ defmodule Forge.CodeIntelligence.SyntacticTokens do
         :function
       end
 
-    token(document, meta[:line], meta[:column], Atom.to_string(name), token_type) ++
-      Enum.flat_map(args, &do_collect_tokens(&1, document, :default))
+    [
+      token(document, meta[:line], meta[:column], Atom.to_string(name), token_type),
+      Enum.map(args, &scan(&1, document, :default))
+    ]
   end
 
-  defp do_collect_tokens({name, meta, args}, %Document{} = document, :bitstring_spec)
+  defp scan({name, meta, args}, %Document{} = document, :bitstring_spec)
        when is_atom(name) and is_list(args) do
     token_type =
       if operator?(name) do
@@ -449,11 +491,13 @@ defmodule Forge.CodeIntelligence.SyntacticTokens do
         :keyword
       end
 
-    token(document, meta[:line], meta[:column], Atom.to_string(name), token_type) ++
-      Enum.flat_map(args, &do_collect_tokens(&1, document, :default))
+    [
+      token(document, meta[:line], meta[:column], Atom.to_string(name), token_type),
+      Enum.map(args, &scan(&1, document, :default))
+    ]
   end
 
-  defp do_collect_tokens({name, meta, nil}, %Document{} = document, :bitstring_spec)
+  defp scan({name, meta, nil}, %Document{} = document, :bitstring_spec)
        when is_atom(name) do
     token_type =
       if operator?(name) do
@@ -465,17 +509,17 @@ defmodule Forge.CodeIntelligence.SyntacticTokens do
     token(document, meta[:line], meta[:column], Atom.to_string(name), token_type)
   end
 
-  defp do_collect_tokens({name, meta, nil}, %Document{} = document, :parameter)
+  defp scan({name, meta, nil}, %Document{} = document, :parameter)
        when is_atom(name) do
     token(document, meta[:line], meta[:column], Atom.to_string(name), :parameter)
   end
 
-  defp do_collect_tokens({name, meta, nil}, %Document{} = document, _context)
+  defp scan({name, meta, nil}, %Document{} = document, _context)
        when is_atom(name) do
     token(document, meta[:line], meta[:column], Atom.to_string(name), :variable)
   end
 
-  defp do_collect_tokens({name, meta, args}, %Document{} = document, _context)
+  defp scan({name, meta, args}, %Document{} = document, _context)
        when is_atom(name) and is_list(args) do
     token_type =
       if operator?(name) do
@@ -484,41 +528,51 @@ defmodule Forge.CodeIntelligence.SyntacticTokens do
         :function
       end
 
-    token(document, meta[:line], meta[:column], Atom.to_string(name), token_type) ++
-      Enum.flat_map(args, &do_collect_tokens(&1, document, :default))
+    [
+      token(document, meta[:line], meta[:column], Atom.to_string(name), token_type),
+      Enum.map(args, &scan(&1, document, :default))
+    ]
   end
 
-  defp do_collect_tokens({left, right}, %Document{} = document, context) do
-    do_collect_tokens(left, document, context) ++
-      do_collect_tokens(right, document, :default)
+  defp scan({left, right}, %Document{} = document, context) do
+    [
+      scan(left, document, context),
+      scan(right, document, :default)
+    ]
   end
 
-  defp do_collect_tokens(_other, _document, _context), do: []
+  defp scan(_other, _document, _context), do: []
 
   defp definition_head_tokens({:when, meta, [head | guards]}, %Document{} = document) do
-    token(document, meta[:line], meta[:column], "when", :operator) ++
-      definition_head_tokens(head, document) ++
-      Enum.flat_map(guards, &do_collect_tokens(&1, document, :default))
+    [
+      token(document, meta[:line], meta[:column], "when", :operator),
+      definition_head_tokens(head, document),
+      Enum.map(guards, &scan(&1, document, :default))
+    ]
   end
 
   defp definition_head_tokens({name, meta, args}, %Document{} = document)
        when is_atom(name) and is_list(args) do
-    token(document, meta[:line], meta[:column], Atom.to_string(name), :function) ++
-      Enum.flat_map(args, &do_collect_tokens(&1, document, :parameter))
+    [
+      token(document, meta[:line], meta[:column], Atom.to_string(name), :function),
+      Enum.map(args, &scan(&1, document, :parameter))
+    ]
   end
 
   defp definition_head_tokens(other, %Document{} = document) do
-    do_collect_tokens(other, document, :parameter)
+    scan(other, document, :parameter)
   end
 
   defp fn_clause_tokens({:->, meta, [params, body]}, %Document{} = document) do
-    token(document, meta[:line], meta[:column], "->", :operator) ++
-      do_collect_tokens(params, document, :parameter) ++
-      do_collect_tokens(body, document, :default)
+    [
+      token(document, meta[:line], meta[:column], "->", :operator),
+      scan(params, document, :parameter),
+      scan(body, document, :default)
+    ]
   end
 
   defp fn_clause_tokens(other, %Document{} = document) do
-    do_collect_tokens(other, document, :default)
+    scan(other, document, :default)
   end
 
   defp block_tokens(%Document{} = document, meta) do
@@ -534,7 +588,7 @@ defmodule Forge.CodeIntelligence.SyntacticTokens do
         _ -> []
       end
 
-    do_token ++ end_token
+    [do_token, end_token]
   end
 
   defp interpolated_literal_tokens(ast, parts, %Document{} = document, type)
@@ -549,10 +603,11 @@ defmodule Forge.CodeIntelligence.SyntacticTokens do
             interpolation, {acc, cursor} ->
               case AstRange.fetch(interpolation, document) do
                 {:ok, %Range{start: interpolation_start, end: interpolation_end}} ->
-                  tokens =
-                    acc ++
-                      span_tokens(document, cursor, interpolation_start, type) ++
-                      interpolation_tokens(interpolation, document)
+                  tokens = [
+                    acc,
+                    span_tokens(document, cursor, interpolation_start, type),
+                    interpolation_tokens(interpolation, document)
+                  ]
 
                   {tokens, interpolation_end}
 
@@ -561,7 +616,7 @@ defmodule Forge.CodeIntelligence.SyntacticTokens do
               end
           end)
 
-        tokens ++ span_tokens(document, cursor, finish, type)
+        [tokens, span_tokens(document, cursor, finish, type)]
 
       _ ->
         []
@@ -574,9 +629,17 @@ defmodule Forge.CodeIntelligence.SyntacticTokens do
          %Document{} = document
        ) do
     if interpolation_meta[:from_interpolation] == true and match?({:binary, _, nil}, binary_ast) do
-      token(document, interpolation_meta[:line], interpolation_meta[:column], ~S(#{), :operator) ++
-        do_collect_tokens(value, document, :default) ++
+      [
+        token(
+          document,
+          interpolation_meta[:line],
+          interpolation_meta[:column],
+          ~S(#{),
+          :operator
+        ),
+        scan(value, document, :default),
         closing_token(document, interpolation_meta, "}", :operator)
+      ]
     else
       []
     end
@@ -696,6 +759,12 @@ defmodule Forge.CodeIntelligence.SyntacticTokens do
   end
 
   defp token(_document, _line, _column, _text, _type), do: []
+
+  defp flatten_tokens(token_tree) when is_list(token_tree) do
+    List.flatten(token_tree)
+  end
+
+  defp flatten_tokens(token), do: [token]
 
   defp encode([]), do: []
 
