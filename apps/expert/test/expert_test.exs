@@ -161,6 +161,55 @@ defmodule Expert.ExpertTest do
     assert legend == Expert.CodeIntelligence.SemanticTokens.legend()
   end
 
+  test "semantic token requests are served before engine initialization" do
+    project = Fixtures.project()
+    lsp = initialize_lsp(project)
+
+    Expert.Project.Store.add_projects([project])
+
+    uri =
+      project
+      |> Forge.Project.root_path()
+      |> Path.join("lib/semantic_tokens_before_engine.ex")
+      |> Forge.Document.Path.to_uri()
+
+    :ok = Forge.Document.Store.open(uri, "defmodule Foo do\nend\n", 1, "elixir")
+
+    request = %GenLSP.Requests.TextDocumentSemanticTokensFull{
+      id: 1,
+      jsonrpc: "2.0",
+      method: "textDocument/semanticTokens/full",
+      params: %GenLSP.Structures.SemanticTokensParams{
+        text_document: %GenLSP.Structures.TextDocumentIdentifier{uri: uri}
+      }
+    }
+
+    assert {:reply, %GenLSP.Structures.SemanticTokens{data: data}, ^lsp} =
+             Expert.handle_request(request, lsp)
+
+    assert data != []
+    assert :ok = Forge.Document.Store.close(uri)
+  end
+
+  test "engine initialization requests a semantic token refresh when supported" do
+    project = Fixtures.project()
+
+    capabilities = %GenLSP.Structures.ClientCapabilities{
+      workspace: %GenLSP.Structures.WorkspaceClientCapabilities{
+        semantic_tokens: %GenLSP.Structures.SemanticTokensWorkspaceClientCapabilities{
+          refresh_support: true
+        }
+      }
+    }
+
+    lsp = initialize_lsp(project, capabilities: capabilities)
+
+    assert {:noreply, ^lsp} =
+             Expert.handle_info({:engine_initialized, project, {:ok, self()}}, lsp)
+
+    assert_receive {:transport, %GenLSP.Requests.WorkspaceSemanticTokensRefresh{}}
+  end
+
   test "document requests return an error when the document cannot be loaded" do
     project = Fixtures.project()
     lsp = initialize_lsp(project)
@@ -213,6 +262,7 @@ defmodule Expert.ExpertTest do
     root_uri = project.root_uri
     root_path = Forge.Project.root_path(project)
     client_name = opts[:client_name]
+    capabilities = opts[:capabilities] || %GenLSP.Structures.ClientCapabilities{}
 
     client_info =
       if is_binary(client_name) do
@@ -224,7 +274,7 @@ defmodule Expert.ExpertTest do
       jsonrpc: "2.0",
       method: "initialize",
       params: %GenLSP.Structures.InitializeParams{
-        capabilities: %GenLSP.Structures.ClientCapabilities{},
+        capabilities: capabilities,
         client_info: client_info,
         process_id: "",
         root_uri: root_uri,

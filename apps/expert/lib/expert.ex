@@ -152,7 +152,7 @@ defmodule Expert do
       projects = Store.projects()
 
       with {:ok, context} <- Lookup.resolve_from_request(request, projects) do
-        if Store.ready?(context.project) do
+        if semantic_tokens_request?(request) or Store.ready?(context.project) do
           {:ok, context}
         else
           {:error, :engine_not_initialized, context.project}
@@ -171,6 +171,15 @@ defmodule Expert do
 
   defp document_request?(%{text_document: %{uri: _}}), do: true
   defp document_request?(_), do: false
+
+  defp semantic_tokens_request?(%Requests.TextDocumentSemanticTokensFull{}), do: true
+  defp semantic_tokens_request?(_), do: false
+
+  defp maybe_refresh_semantic_tokens(lsp) do
+    if Expert.Configuration.client_support(:semantic_tokens_refresh) do
+      GenLSP.request(lsp, %Requests.WorkspaceSemanticTokensRefresh{id: Id.next()})
+    end
+  end
 
   def handle_notification(%GenLSP.Notifications.Initialized{}, lsp) do
     Logger.info("Server initialized, registering capabilities")
@@ -249,6 +258,8 @@ defmodule Expert do
       "Engine initialized for project #{Project.name(project)}",
       project: project
     )
+
+    maybe_refresh_semantic_tokens(lsp)
 
     {:noreply, lsp}
   end

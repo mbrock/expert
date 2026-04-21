@@ -43,6 +43,11 @@ defmodule Expert.Configuration.Support do
       :window,
       :work_done_progress
     ],
+    semantic_tokens_refresh: [
+      :workspace,
+      :semantic_tokens,
+      :refresh_support
+    ],
     show_message: [
       :window,
       :show_message
@@ -56,6 +61,7 @@ defmodule Expert.Configuration.Support do
             tags: false,
             signature_help: false,
             work_done_progress: false,
+            semantic_tokens_refresh: false,
             show_message: false
 
   @type t :: %__MODULE__{}
