@@ -150,6 +150,23 @@ defmodule Expert.CodeIntelligence.SemanticTokens do
   end
 
   defp do_collect_tokens(
+         {{:., _dot_meta, [Access, :get]}, meta, [receiver, key]},
+         %Document{} = document,
+         _context
+       ) do
+    if meta[:from_brackets] == true do
+      do_collect_tokens(receiver, document, :default) ++
+        token(document, meta[:line], meta[:column], "[", :operator) ++
+        do_collect_tokens(key, document, :default) ++
+        closing_token(document, meta, "]", :operator)
+    else
+      do_collect_tokens(receiver, document, :default) ++
+        token(document, meta[:line], meta[:column], "get", :function) ++
+        do_collect_tokens([key], document, :default)
+    end
+  end
+
+  defp do_collect_tokens(
          {{:., dot_meta, [receiver, name]}, meta, args},
          %Document{} = document,
          _context
@@ -172,6 +189,20 @@ defmodule Expert.CodeIntelligence.SemanticTokens do
 
   defp do_collect_tokens({:__aliases__, _, _} = ast, %Document{} = document, _context) do
     range_token(ast, document, :namespace)
+  end
+
+  defp do_collect_tokens({:<<>>, meta, parts} = ast, %Document{} = document, _context)
+       when is_list(parts) do
+    if is_binary(meta[:delimiter]) do
+      if Enum.any?(parts, &(not is_binary(&1))) do
+        interpolated_string_tokens(ast, parts, document)
+      else
+        range_tokens(ast, document, :string)
+      end
+    else
+      token(document, meta[:line], meta[:column], "<<>>", :operator) ++
+        Enum.flat_map(parts, &do_collect_tokens(&1, document, :default))
+    end
   end
 
   defp do_collect_tokens(
@@ -305,6 +336,61 @@ defmodule Expert.CodeIntelligence.SemanticTokens do
     do_token ++ end_token
   end
 
+  defp interpolated_string_tokens({:<<>>, _, parts} = ast, parts, %Document{} = document) do
+    case AstRange.fetch(ast, document) do
+      {:ok, %Range{start: start, end: finish}} ->
+        {tokens, cursor} =
+          Enum.reduce(parts, {[], start}, fn
+            literal, {acc, cursor} when is_binary(literal) ->
+              {acc, cursor}
+
+            interpolation, {acc, cursor} ->
+              case AstRange.fetch(interpolation, document) do
+                {:ok, %Range{start: interpolation_start, end: interpolation_end}} ->
+                  tokens =
+                    acc ++
+                      span_tokens(document, cursor, interpolation_start, :string) ++
+                      interpolation_tokens(interpolation, document)
+
+                  {tokens, interpolation_end}
+
+                :error ->
+                  {acc, cursor}
+              end
+          end)
+
+        tokens ++ span_tokens(document, cursor, finish, :string)
+
+      _ ->
+        []
+    end
+  end
+
+  defp interpolation_tokens(
+         {:"::", _meta,
+          [{{:., _, [Kernel, :to_string]}, interpolation_meta, [value]}, binary_ast]},
+         %Document{} = document
+       ) do
+    if interpolation_meta[:from_interpolation] == true and match?({:binary, _, nil}, binary_ast) do
+      token(document, interpolation_meta[:line], interpolation_meta[:column], ~S(#{), :operator) ++
+        do_collect_tokens(value, document, :default) ++
+        closing_token(document, interpolation_meta, "}", :operator)
+    else
+      []
+    end
+  end
+
+  defp interpolation_tokens(interpolation, %Document{} = document) do
+    range_tokens(interpolation, document, :string)
+  end
+
+  defp closing_token(%Document{} = document, meta, text, type) do
+    case meta[:closing] do
+      [line: line, column: column] -> token(document, line, column, text, type)
+      _ -> []
+    end
+  end
+
   defp range_token(ast, %Document{} = document, type) do
     with {:ok, %Range{start: start, end: finish}} <- AstRange.fetch(ast, document),
          true <- start.line == finish.line,
@@ -323,6 +409,71 @@ defmodule Expert.CodeIntelligence.SemanticTokens do
       _ -> []
     end
   end
+
+  defp range_tokens(ast, %Document{} = document, type) do
+    case AstRange.fetch(ast, document) do
+      {:ok, %Range{start: start, end: finish}} -> span_tokens(document, start, finish, type)
+      _ -> []
+    end
+  end
+
+  defp span_tokens(%Document{} = document, %Position{} = start, %Position{} = finish, type) do
+    case Position.compare(start, finish) do
+      :lt ->
+        Enum.flat_map(start.line..finish.line, fn line ->
+          line_start =
+            if line == start.line do
+              start.character
+            else
+              1
+            end
+
+          line_finish =
+            if line == finish.line do
+              finish.character
+            else
+              case Document.fetch_text_at(document, line) do
+                {:ok, text} -> String.length(text) + 1
+                :error -> 1
+              end
+            end
+
+          token_between(document, line, line_start, line_finish, type)
+        end)
+
+      _ ->
+        []
+    end
+  end
+
+  defp token_between(%Document{} = document, line, start_column, finish_column, type)
+       when is_integer(line) and is_integer(start_column) and is_integer(finish_column) and
+              start_column < finish_column do
+    start = Position.new(document, line, start_column)
+    finish = Position.new(document, line, finish_column)
+    text = Document.fragment(document, start, finish)
+
+    case {text, Conversions.to_lsp(start)} do
+      {"", _} ->
+        []
+
+      {_, {:error, _}} ->
+        []
+
+      {text, {:ok, lsp_position}} ->
+        [
+          %{
+            line: lsp_position.line,
+            start: lsp_position.character,
+            length: CodeUnit.count(:utf16, text),
+            type: token_type_index(type),
+            modifiers: 0
+          }
+        ]
+    end
+  end
+
+  defp token_between(_document, _line, _start_column, _finish_column, _type), do: []
 
   defp token(%Document{} = document, line, column, text, type)
        when is_integer(line) and is_integer(column) and is_binary(text) and text != "" do

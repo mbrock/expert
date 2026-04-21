@@ -58,6 +58,41 @@ defmodule Expert.Provider.Handlers.SemanticTokensTest do
     assert %{line: 5, start: 0, length: 3, type: "keyword"} in tokens
   end
 
+  test "emits semantic tokens for interpolated strings and bracket access" do
+    text = ~S"""
+    "hello #{name} world"
+    meta[:line]
+    """
+
+    uri = "file:///semantic_tokens_interpolation_test.ex"
+    :ok = Document.Store.open(uri, text, 1)
+
+    on_exit(fn ->
+      Document.Store.close(uri)
+    end)
+
+    {:ok, request} = build_request(uri)
+
+    document = Document.Container.context_document(request, nil)
+    context = Context.new(uri, document, Project.bare(uri))
+
+    {:ok, %Structures.SemanticTokens{data: data}} =
+      Handlers.SemanticTokens.handle(request, context)
+
+    tokens = decode(data, SemanticTokens.legend())
+
+    assert %{line: 0, start: 0, length: 7, type: "string"} in tokens
+    assert %{line: 0, start: 7, length: 2, type: "operator"} in tokens
+    assert %{line: 0, start: 9, length: 4, type: "variable"} in tokens
+    assert %{line: 0, start: 13, length: 1, type: "operator"} in tokens
+    assert %{line: 0, start: 14, length: 7, type: "string"} in tokens
+
+    assert %{line: 1, start: 0, length: 4, type: "variable"} in tokens
+    assert %{line: 1, start: 4, length: 1, type: "operator"} in tokens
+    assert %{line: 1, start: 5, length: 5, type: "enumMember"} in tokens
+    assert %{line: 1, start: 10, length: 1, type: "operator"} in tokens
+  end
+
   defp build_request(uri) do
     request = %TextDocumentSemanticTokensFull{
       id: 1,
