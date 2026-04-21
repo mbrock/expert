@@ -93,6 +93,66 @@ defmodule Expert.Provider.Handlers.SemanticTokensTest do
     assert %{line: 1, start: 10, length: 1, type: "operator"} in tokens
   end
 
+  test "emits semantic tokens for interpolated quoted atoms" do
+    text = ~S|:"#{Project.name(project)}_handler"|
+
+    uri = "file:///semantic_tokens_interpolated_atom_test.ex"
+    :ok = Document.Store.open(uri, text, 1)
+
+    on_exit(fn ->
+      Document.Store.close(uri)
+    end)
+
+    {:ok, request} = build_request(uri)
+
+    document = Document.Container.context_document(request, nil)
+    context = Context.new(uri, document, Project.bare(uri))
+
+    {:ok, %Structures.SemanticTokens{data: data}} =
+      Handlers.SemanticTokens.handle(request, context)
+
+    tokens = decode(data, SemanticTokens.legend())
+
+    assert %{line: 0, start: 0, length: 2, type: "enumMember"} in tokens
+    assert %{line: 0, start: 2, length: 2, type: "operator"} in tokens
+    assert %{line: 0, start: 4, length: 7, type: "namespace"} in tokens
+    assert %{line: 0, start: 11, length: 1, type: "operator"} in tokens
+    assert %{line: 0, start: 12, length: 4, type: "function"} in tokens
+    assert %{line: 0, start: 17, length: 7, type: "variable"} in tokens
+    assert %{line: 0, start: 25, length: 1, type: "operator"} in tokens
+    assert %{line: 0, start: 26, length: 9, type: "enumMember"} in tokens
+  end
+
+  test "emits semantic tokens for atoms in collections" do
+    text = """
+    :foo
+    [:foo]
+    {:foo, bar}
+    """
+
+    uri = "file:///semantic_tokens_atom_collections_test.ex"
+    :ok = Document.Store.open(uri, text, 1)
+
+    on_exit(fn ->
+      Document.Store.close(uri)
+    end)
+
+    {:ok, request} = build_request(uri)
+
+    document = Document.Container.context_document(request, nil)
+    context = Context.new(uri, document, Project.bare(uri))
+
+    {:ok, %Structures.SemanticTokens{data: data}} =
+      Handlers.SemanticTokens.handle(request, context)
+
+    tokens = decode(data, SemanticTokens.legend())
+
+    assert %{line: 0, start: 0, length: 4, type: "enumMember"} in tokens
+    assert %{line: 1, start: 1, length: 4, type: "enumMember"} in tokens
+    assert %{line: 2, start: 1, length: 4, type: "enumMember"} in tokens
+    assert %{line: 2, start: 7, length: 3, type: "variable"} in tokens
+  end
+
   defp build_request(uri) do
     request = %TextDocumentSemanticTokensFull{
       id: 1,

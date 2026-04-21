@@ -150,6 +150,19 @@ defmodule Expert.CodeIntelligence.SemanticTokens do
   end
 
   defp do_collect_tokens(
+         {{:., _, [:erlang, :binary_to_atom]}, meta, [{:<<>>, _, parts}, :utf8]} = ast,
+         %Document{} = document,
+         _context
+       )
+       when is_list(parts) do
+    if is_binary(meta[:delimiter]) and Enum.any?(parts, &(not is_binary(&1))) do
+      interpolated_literal_tokens(ast, parts, document, :enumMember)
+    else
+      []
+    end
+  end
+
+  defp do_collect_tokens(
          {{:., _dot_meta, [Access, :get]}, meta, [receiver, key]},
          %Document{} = document,
          _context
@@ -195,7 +208,7 @@ defmodule Expert.CodeIntelligence.SemanticTokens do
        when is_list(parts) do
     if is_binary(meta[:delimiter]) do
       if Enum.any?(parts, &(not is_binary(&1))) do
-        interpolated_string_tokens(ast, parts, document)
+        interpolated_literal_tokens(ast, parts, document, :string)
       else
         range_tokens(ast, document, :string)
       end
@@ -235,7 +248,9 @@ defmodule Expert.CodeIntelligence.SemanticTokens do
         range_token(ast, document, :number)
 
       true ->
-        []
+        ast
+        |> elem(2)
+        |> Enum.flat_map(&do_collect_tokens(&1, document, :default))
     end
   end
 
@@ -336,7 +351,8 @@ defmodule Expert.CodeIntelligence.SemanticTokens do
     do_token ++ end_token
   end
 
-  defp interpolated_string_tokens({:<<>>, _, parts} = ast, parts, %Document{} = document) do
+  defp interpolated_literal_tokens(ast, parts, %Document{} = document, type)
+       when is_list(parts) do
     case AstRange.fetch(ast, document) do
       {:ok, %Range{start: start, end: finish}} ->
         {tokens, cursor} =
@@ -349,7 +365,7 @@ defmodule Expert.CodeIntelligence.SemanticTokens do
                 {:ok, %Range{start: interpolation_start, end: interpolation_end}} ->
                   tokens =
                     acc ++
-                      span_tokens(document, cursor, interpolation_start, :string) ++
+                      span_tokens(document, cursor, interpolation_start, type) ++
                       interpolation_tokens(interpolation, document)
 
                   {tokens, interpolation_end}
@@ -359,7 +375,7 @@ defmodule Expert.CodeIntelligence.SemanticTokens do
               end
           end)
 
-        tokens ++ span_tokens(document, cursor, finish, :string)
+        tokens ++ span_tokens(document, cursor, finish, type)
 
       _ ->
         []
