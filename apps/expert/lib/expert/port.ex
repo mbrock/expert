@@ -191,7 +191,7 @@ defmodule Expert.Port do
     path =
       if shell_available?(shell_env) do
         case path_env_at_directory(root_path, shell_env) do
-          {:ok, path} -> path
+          {:ok, path} -> filter_release_root_from_path(path)
           {:error, :timeout} -> filter_release_root_from_path()
         end
       else
@@ -241,19 +241,18 @@ defmodule Expert.Port do
     shell != nil and File.exists?(shell)
   end
 
-  defp filter_release_root_from_path do
-    current_path = System.get_env("PATH", @default_unix_path)
+  defp filter_release_root_from_path(path \\ System.get_env("PATH", @default_unix_path)) do
     release_root = System.get_env("RELEASE_ROOT")
 
     if release_root do
-      current_path
+      path
       |> String.split(":")
       |> Enum.reject(fn entry ->
         String.starts_with?(entry, release_root)
       end)
       |> Enum.join(":")
     else
-      current_path
+      path
     end
   end
 
